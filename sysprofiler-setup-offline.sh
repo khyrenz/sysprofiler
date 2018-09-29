@@ -36,6 +36,7 @@ regripfilename=$(basename "${regripperfile}")
 regripunzipdirname="${regripfilename%.*}"
 
 #installing RegRipper
+#modifying to work on Linux - instructions courtesy of https://linuxconfig.org/how-to-install-regripper-registry-data-extraction-tool-on-linux
 unzip -q $regripperfile
 build_folder=$basedir/$regripunzipdirname
 tail -n +2 $build_folder/rip.pl > rip

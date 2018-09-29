@@ -683,6 +683,7 @@ function get_usb_info {
 			local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"||"
 			write_out $out_str $out_file_usbs $out_file_usbs_header
 						
+		#deleting mountdev temp file
 		rm -r $mountdev_file
 	fi
 }
@@ -864,8 +865,7 @@ function get_apps {
 			local reg_key=$uninst_line
 		fi
 	done
-	
-	#writing app info out
+
 	for (( i=0; i<${#apps[@]}; i++ )); do
 		write_out ${apps[$i]} $out_file_apps_all $out_file_apps_header
 	done

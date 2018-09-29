@@ -9,6 +9,7 @@ cpanm -l /usr/local/lib/rip-lib Parse::Win32Registry
 cpan look Parse::Win32Registry
 
 #downloading and installing regripper
+#modifying to work on Linux - instructions courtesy of https://linuxconfig.org/how-to-install-regripper-registry-data-extraction-tool-on-linux
 wget -q https://github.com/keydet89/RegRipper2.8/archive/master.zip
 unzip -q master.zip
 tail -n +2 RegRipper2.8-master/rip.pl > rip
