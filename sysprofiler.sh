@@ -10,7 +10,7 @@ function print_usage {
 	echo "   -h                    - display this help information"
 	echo "   -k                    - keep files extracted from image file (deleted by default when script completes)"
 	echo "   -m <modules>          - supported modules: "$modules
-	echo "   -m <modules>          - (default is all modules)."
+	echo "                         - (default is all modules)."
 	echo "                           To run multiple modules, separate with commas, eg '-m osinfo,users,usbs'"
 	echo "                           Note: file listing will only be run on the Windows volume"
 	echo "   -n                    - Compare file hashes to NIST NSRL database. Please note, this will take some time!"
@@ -266,10 +266,10 @@ function get_volume_info {
 			tz_line=$(echo $tz_line | sed -e 's/^[[:space:]]*//')
 			
 			if [[ $tz_line == "StandardName"* ]]; then
-				local tz_name=$(echo $tz_line | sed 's/StandardName   ->//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				local tz_name=$(echo $tz_line | sed 's/StandardName   ->//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//' | tr -dc '[[:print:]]')
 			fi
 			if [[ $tz_line == "TimeZoneKeyName"* ]]; then
-				local tzkn_name=$(echo $tz_line | sed 's/TimeZoneKeyName->//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				local tzkn_name=$(echo $tz_line | sed 's/TimeZoneKeyName->//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//' | tr -dc '[[:print:]]')
 			fi
 			if [[ $tz_line == "ActiveTimeBias"* ]]; then
 				local tz_bias=$(echo $tz_line | sed 's/ActiveTimeBias ->//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//' | cut -d '(' -f2 | cut -d ')' -f1)
@@ -544,16 +544,14 @@ function get_file_list {
 function get_usb_info {
 	#extracting USB info using regripper for windows volume
 	if [[ "$(is_windows_volume)" == true ]]; then
-		local usbinfo=$(rip -p usbstor -r $dumppath"/SYSTEM")
+		local usbinfo="$(rip -p usbstor -r $dumppath'/SYSTEM')"
 		
-		local usb_id_str=""
-		local usb_name=""
-		local usb_sn=""
-		local usb_parent_id_prefix=""
-		local mountdrive=""
+		#writing mountdev (mounted devices) info to temp file for later parsing
+		local mountdev_file=$dumppath"/mountdev.txt"
+		rip -p mountdev -r $dumppath'/SYSTEM' > $mountdev_file
 		
 		#getting currentcontrolset - required to extract timestamps directly from registry
-		local selectkey=$(get_reg_value TEMP/SYSTEM Select)
+		local selectkey=$(get_reg_value $dumppath/SYSTEM Select)
 		for selkey in $selectkey; do
 			if [[ $selkey == "Current"* ]]; then
 				local currcontrolset=$(echo $selkey | sed 's@.*(@@' | sed 's/)//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
@@ -561,120 +559,205 @@ function get_usb_info {
 			fi
 		done
 		
-		for usb_line in $usbinfo; do
-			if [[ ( $usb_line == "Disk&Ven"* ) || ( $usb_line == "Other&Ven"* ) ]]; then
-				if [[ ! -z $usb_id_str ]]; then
-					#getting extra timestamps from registry that are not included in regripper (if currentcontrolset is known)
-					if [[ ! -z $currcontrolset ]]; then
-						local firstinstall=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0064)
-						local firstinstall=$(echo $firstinstall | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-						local firstinstall=$(convert_filetime_to_unix_date $firstinstall)
+		if [[ $usbinfo != *"ControlSet001\Enum\USBStor not found."* ]]; then			
+			local usb_id_str=""
+			local usb_name=""
+			local usb_sn=""
+			local usb_parent_id_prefix=""
+			local mountdrive=""
+			
+			for usb_line in $usbinfo; do
+				if [[ ( $usb_line == "Disk&Ven"* ) || ( $usb_line == "Other&Ven"* ) || ( $usb_line == "CdRom&Ven_"* ) ]]; then
+					if [[ ! -z $usb_id_str ]]; then
+						#getting extra timestamps from registry that are not included in regripper (if currentcontrolset is known)
+						local extra_times=$(get_usb_times_reg $usb_id_str $usb_sn $currcontrolset)
 						
-						local lastconnect=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0066)
-						local lastconnect=$(echo $lastconnect | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-						local lastconnect=$(convert_filetime_to_unix_date $lastconnect)
+						#getting extra timestamps from setupapi, if applicable
+						local setupapi_times=$(get_setupapi_usb_times $usb_sn)
 						
-						local lastremoved=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0067)
-						local lastremoved=$(echo $lastremoved | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-						local lastremoved=$(convert_filetime_to_unix_date $lastremoved)
+						#write out existing info before moving onto next section
+						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+						write_out $out_str $out_file_usbs $out_file_usbs_header
+						
+						#resetting variables to prevent crossover
+						local usb_id_str=""
+						local usb_name=""
+						local usb_sn=""
+						local usb_parent_id_prefix=""
+						local mountdrive=""
+						local extra_times=""
+						local setupapi_times=""
 					fi
 					
-					#getting extra timestamps from setupapi, if applicable
-					if [[ -f $dumppath/setupapi.dev.log ]]; then
-						local grep_res=$(grep -ai -A1 "Device Install (Hardware initiated) - [A-Za-z0-9?&_#\\\\]*USBSTOR[A-Za-z0-9?&_#\\\\]*"$usb_sn $dumppath"/setupapi.dev.log")
+					local usb_id_str=$(echo $usb_line | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				fi
+				if [[ $usb_line == *"S/N"* ]]; then
+					if [[ ! -z $usb_sn ]]; then
+						#more than one device s/n is present for this make & model USB
+						#getting extra timestamps from registry that are not included in regripper (if currentcontrolset is known)
+						local extra_times=$(get_usb_times_reg $usb_id_str $usb_sn $currcontrolset)
+						
+						#getting extra timestamps from setupapi, if applicable
+						local setupapi_times=$(get_setupapi_usb_times $usb_sn)
+						
+						#write out existing info before moving onto next section
+						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+						write_out $out_str $out_file_usbs $out_file_usbs_header
+						
+						#resetting variables to prevent crossover
+						local usb_name=""
+						local usb_sn=""
+						local usb_parent_id_prefix=""
+						local mountdrive=""
+						local extra_times=""
 						local setupapi_times=""
-						for grep_line in $grep_res; do
-							if [[ $grep_line == *"Section start"* ]]; then
-								if [[ -z $setupapi_times ]]; then
-									local setupapi_times=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-									local setupapi_times=$(date -d $setupapi_times -Iseconds -u)
-								else
-									local new_time=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-									local new_time=$(date -d $new_time -Iseconds -u)
-									local setupapi_times=$setupapi_times";"$new_time
-								fi
+					fi
+					local usb_sn=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/S\/N://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				fi
+				if [[ $usb_line == *"FriendlyName"* ]]; then
+					local usb_name=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/FriendlyName    ://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				fi
+				if [[ $usb_line == *"ParentIdPrefix"* ]]; then
+					local usb_parent_id_prefix=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/ParentIdPrefix://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+					
+					local mount_info=$(echo $md_info | grep -a2 "$usb_parent_id_prefix""&RM")
+					
+					if [[ ! -z $mount_info ]]; then
+						for md_line in $mount_info; do
+							if [[ $md_line == *"\\DosDevices\\"* ]]; then
+								local mountdrive=$(echo $md_line | sed -e 's/^[[:space:]]*//' | sed 's/\\DosDevices\\//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
 							fi
 						done
 					fi
-					
-					#write out existing info before moving onto next section
-					local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$firstinstall"|"$lastconnect"|"$lastremoved"|"$setupapi_times
-					write_out $out_str $out_file_usbs $out_file_usbs_header
-					
-					#resetting variables to prevent crossover
-					local usb_id_str=""
-					local usb_name=""
-					local usb_sn=""
-					local usb_parent_id_prefix=""
-					local mountdrive=""
-					local firstinstall=""
-					local lastconnect=""						
-					local lastremoved=""
-					local setupapi_times=""
 				fi
 				
-				local usb_id_str=$(echo $usb_line | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-			fi
-			if [[ $usb_line == *"S/N"* ]]; then
-				local usb_sn=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/S\/N://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-			fi
-			if [[ $usb_line == *"FriendlyName"* ]]; then
-				local usb_name=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/FriendlyName    ://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-			fi
-			if [[ $usb_line == *"ParentIdPrefix"* ]]; then
-				local usb_parent_id_prefix=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/ParentIdPrefix://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-				
-				local md_info=$(echo $mountinfo | grep -a3 "$usb_parent_id_prefix""&RM")
-				local md_info=$(rip -p mountdev -r $dumppath"/SYSTEM" | grep -a2 "$usb_parent_id_prefix""&RM")
-				
-				if [[ ! -z $md_info ]]; then
-					for md_line in $md_info; do
-						if [[ $md_line == *"\\DosDevices\\"* ]]; then
-							local mountdrive=$(echo $md_line | sed -e 's/^[[:space:]]*//' | sed 's/\\DosDevices\\//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-						fi
-					done
-				fi
-			fi
-		done
-		
-		#getting extra timestamps from registry for last USB (if currentcontrolset is known)
-		if [[ ! -z $currcontrolset ]]; then
-			local firstinstall=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0064)
-			local firstinstall=$(echo $firstinstall | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-			local firstinstall=$(convert_filetime_to_unix_date $firstinstall)
-			
-			local lastconnect=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0066)
-			local lastconnect=$(echo $lastconnect | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-			local lastconnect=$(convert_filetime_to_unix_date $lastconnect)
-			
-			local lastremoved=$(get_reg_value $dumppath/SYSTEM $currcontrolset\\Enum\\USBSTOR\\$usb_id_str\\$usb_sn\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0067)
-			local lastremoved=$(echo $lastremoved | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
-			local lastremoved=$(convert_filetime_to_unix_date $lastremoved)
-		fi
-					
-		#getting extra timestamps from setupapi for last USB, if applicable
-		if [[ -f $dumppath/setupapi.dev.log ]]; then
-			local grep_res=$(grep -ai -A1 "Device Install (Hardware initiated) - [A-Za-z0-9?&_#\\\\]*USBSTOR[A-Za-z0-9?&_#\\\\]*"$usb_sn $dumppath"/setupapi.dev.log")
-			local setupapi_times=""
-			
-			for grep_line in $grep_res; do
-				if [[ $grep_line == *"Section start"* ]]; then
-					if [[ -z $setupapi_times ]]; then
-						local setupapi_times=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-						local setupapi_times=$(date -d $setupapi_times -Iseconds -u)
-					else
-						local new_time=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-						local new_time=$(date -d $new_time -Iseconds -u)
-						local setupapi_times=$setupapi_times";"$new_time
+				#extracting mounted device info for USB & adding into existing data
+				if [[ ( ! -z $usb_id_str ) && ( ! -z $usb_sn ) ]]; then
+					local mountinfo=$(cat $mountdev_file | sed -n -e "/$usb_id_str#$usb_sn/,/Device: / p" 2>/dev/null | sed -e '$d')
+					if [[ $mountinfo == *"\\DosDevices\\"* ]]; then
+						local mountdrive=$(echo $mountinfo | sed 's/^.*\(\\DosDevices\\.*\).*$/\1/' | sed 's/\\DosDevices\\//' | cut -d':' -f1)
 					fi
 				fi
 			done
+			
+			#getting extra timestamps from registry for last USB (if currentcontrolset is known)
+			local extra_times=$(get_usb_times_reg $usb_id_str $usb_sn $currcontrolset)
+						
+			#getting extra timestamps from setupapi for last USB, if applicable
+			local setupapi_times=$(get_setupapi_usb_times $usb_sn)
+						
+			#write out info for last USB listed
+			local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+			write_out $out_str $out_file_usbs $out_file_usbs_header
 		fi
+		
+		#extracting mounted device info for CD-ROM devices
+		local cd_mountinfo=$(cat $mountdev_file | grep -A3 "SCSI#CdRom&Ven_")
+		
+		local cd_id_str=""
+		local cd_sn=""
+		local mountdrive=""
+		
+		for cd_line in $cd_mountinfo; do
+			if [[ $cd_line == "Device: "* ]]; then
+				if [[ ! -z $cd_id_str ]]; then					
+					#write out existing info before moving onto next section
+					local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"||"
+					write_out $out_str $out_file_usbs $out_file_usbs_header
 					
-		#write out info for last USB listed
-		local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$firstinstall"|"$lastconnect"|"$lastremoved"|"$setupapi_times
-		write_out $out_str $out_file_usbs $out_file_usbs_header
+					#resetting variables to prevent crossover
+					local cd_id_str=""
+					local cd_sn=""
+					local mountdrive=""
+				fi
+				
+				local cd_id_str=$(echo $cd_line | cut -d'#' -f2 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+				local cd_sn=$(echo $cd_line | cut -d'#' -f3 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+			fi
+			if [[ $cd_line == *"\\DosDevices\\"* ]]; then
+				local mountdrive=$(echo $cd_line | sed -e 's/^[[:space:]]*//' | sed 's/\\DosDevices\\//' | sed 's/://g' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+			fi
+		done
+			
+			#write out info for last USB listed
+			local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"||"
+			write_out $out_str $out_file_usbs $out_file_usbs_header
+						
+		rm -r $mountdev_file
 	fi
+}
+
+#getting extra USB timestamps from registry
+function get_usb_times_reg {
+	#$1 = $usb_id_str
+	#$2 = $usb_sn
+	#$3 = $currcontrolset
+	
+	if [[ ! -z $3 ]]; then
+		local firstinstall=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0065)
+		if [[ -z $firstinstall ]]; then
+			local firstinstall=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\00000065\\00000000)
+			if [[ -z $firstinstall ]]; then
+				local firstinstall=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0064)
+				if [[ -z $firstinstall ]]; then
+					local firstinstall=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\00000064\\00000000)
+					local firstinstall=$(echo $firstinstall | sed -e 's#.*Data (REG_BINARY)\(\)#\1#' | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+				else
+					local firstinstall=$(echo $firstinstall | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+				fi
+			else
+				local firstinstall=$(echo $firstinstall | sed -e 's#.*Data (REG_BINARY)\(\)#\1#' | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+			fi
+		else
+			local firstinstall=$(echo $firstinstall | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+		fi
+		local firstinstall=$(convert_filetime_to_unix_date $firstinstall)
+		
+		local lastconnect=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0066)
+		if [[ -z $lastconnect ]]; then
+			local lastconnect=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\00000066\\00000000)
+			local lastconnect=$(echo $lastconnect | sed -e 's#.*Data (REG_BINARY)\(\)#\1#' | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+		else
+			local lastconnect=$(echo $lastconnect | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+		fi
+		local lastconnect=$(convert_filetime_to_unix_date $lastconnect)
+		
+		local lastremoved=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0067)
+		if [[ -z $lastremoved ]]; then
+			local lastremoved=$(get_reg_value $dumppath/SYSTEM $3\\Enum\\USBSTOR\\$1\\$2\\Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\00000067\\00000000)
+			local lastremoved=$(echo $lastremoved | sed -e 's#.*Data (REG_BINARY)\(\)#\1#' | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+		else
+			local lastremoved=$(echo $lastremoved | cut -d '=' -f2 | sed -e 's/[[:space:]]//g')
+		fi
+		local lastremoved=$(convert_filetime_to_unix_date $lastremoved)
+		
+		echo $firstinstall"|"$lastconnect"|"$lastremoved
+	fi
+}
+
+#getting extra timestamps from setupapi, if applicable
+function get_setupapi_usb_times {
+	#$1 = $usb_sn
+	
+	if [[ -f $dumppath/setupapi.dev.log ]]; then
+		local grep_res=$(grep -ai -A1 "Device Install (Hardware initiated) - [A-Za-z0-9?&_#\\\\]*USBSTOR[A-Za-z0-9?&_#\\\\]*"$1 $dumppath"/setupapi.dev.log")
+		local setupapi_times=""
+		
+		for grep_line in $grep_res; do
+			if [[ $grep_line == *"Section start"* ]]; then
+				if [[ -z $setupapi_times ]]; then
+					local setupapi_times=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+					local setupapi_times=$(date -d $setupapi_times -Iseconds -u)
+				else
+					local new_time=$(echo $grep_line | sed -e 's/^>*//' | sed 's/Section start//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+					local new_time=$(date -d $new_time -Iseconds -u)
+					local setupapi_times=$setupapi_times";"$new_time
+				fi
+			fi
+		done
+	fi
+	
+	echo $setupapi_times
 }
 
 #getting info for installed applications
@@ -683,6 +766,7 @@ function get_apps {
 	local installer_info=$(rip -p installer -r $dumppath"/SOFTWARE")
 	local next=false
 	local app_count=0
+	local ms_app_count=0
 	
 	#parsing output & extracting fields of interest
 	for inst_line in $installer_info; do
@@ -704,9 +788,21 @@ function get_apps {
 			local app_name="${app_name% *}"
 			local app_mfr=$(echo $inst_line | sed 's@.*(@@' | sed 's/)//' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
 			
-			#adding info to array
-			local apps[$app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
-			(( app_count++ ))
+			#adding info to arrays if not already present - storing MS apps separately
+			if [[ $app_mfr == "Microsoft"* ]]; then
+				local in_msapp_array=$(array_contains $app_name"|"$app_ver "${ms_apps[@]}")
+				if [[ "$in_msapp_array" == false ]]; then
+					local ms_apps[$ms_app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
+					(( ms_app_count++ ))
+				fi
+			elif [[ ! $app_name =~ "{"[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]"-"* ]]; then
+				#omitting GUID names
+				local in_app_array=$(array_contains $app_name"|"$app_ver "${apps[@]}")
+				if [[ "$in_app_array" == false ]]; then
+					local apps[$app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
+					(( app_count++ ))
+				fi
+			fi
 			
 			#resetting variables to prevent crossover
 			local app_name=""
@@ -724,13 +820,6 @@ function get_apps {
 	
 	#parsing output & extracting fields, then comparing to info already in array - adding new apps
 	for uninst_line in $uninstall_info; do
-		if [[ $next == true ]]; then
-			local reg_key=$uninst_line
-			local next=false
-		fi
-		if [[ $uninst_line == "Uninstall" ]]; then
-			local next=true
-		fi
 		if [[ $uninst_line =~ [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"|"* ]]; then
 			#Line format is <date>|REG|||[Uninstall] - <app> <version>
 			#eg. 1088589366|REG|||[Uninstall] - OutlookFolders 2.0.12
@@ -745,25 +834,47 @@ function get_apps {
 			fi
 			
 			#checking if app is already in array & if not, adding it
-			local found=$(array_contains $app_name "${apps[@]}")
-			if [[ "$found" == false ]]; then
-				#extracting date
-				local install_date="${uninst_line%%|*}"
-				local install_date=$(date -d @$install_date -Iseconds -u)
-				
-				#add to array
-				local apps[$app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
-				(( app_count++ ))
+			if [[ $uninst_line == *"Microsoft"* ]]; then
+				local found=$(array_contains $app_name "${ms_apps[@]}")
+				if [[ "$found" == false ]]; then
+					#extracting date
+					local install_date="${uninst_line%%|*}"
+					local install_date=$(date -d @$install_date -Iseconds -u)
+					
+					#add to array
+					local ms_apps[$ms_app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
+					(( ms_app_count++ ))
+				fi
+			else
+				local found=$(array_contains $app_name "${apps[@]}")
+				if [[ "$found" == false ]]; then
+					#extracting date
+					local install_date="${uninst_line%%|*}"
+					local install_date=$(date -d @$install_date -Iseconds -u)
+					
+					#add to array
+					if [[ ! $app_name =~ "{"[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]"-"* ]]; then
+						#omitting GUID names
+						local apps[$app_count]=$reg_key"|"$user_sid"|"$app_name"|"$app_ver"|"$app_mfr"|"$install_date
+						(( app_count++ ))
+					fi
+				fi
 			fi
+		elif [[ ! -z $uninst_line ]]; then
+			local reg_key=$uninst_line
 		fi
 	done
 	
 	#writing app info out
-	for inst_app in "${apps[@]}"; do
-		write_out $inst_app $out_file_apps_all $out_file_apps_header
+	for (( i=0; i<${#apps[@]}; i++ )); do
+		write_out ${apps[$i]} $out_file_apps_all $out_file_apps_header
+	done
+	for (( i=0; i<${#ms_apps[@]}; i++ )); do
+		write_out ${ms_apps[$i]} $out_file_apps_all $out_file_apps_header
 	done
 }
 
+#determining if element is in array
 function array_contains {
     local search_for=$1; shift
     local found=false
@@ -778,6 +889,21 @@ function array_contains {
     echo $found
 }
 
+#getting element location in array
+function elem_loc_in_array {
+    local search_for=$1; shift
+    local loc=0
+	
+    for arr_elem; do
+		(( loc++ ))
+        if [[ $arr_elem == *$search_for* ]]; then
+            break
+        fi
+    done
+	
+	echo $loc
+}
+
 #getting info for installed applications
 function get_network_info {
 	#getting network info using RegRipper
@@ -790,24 +916,37 @@ function get_network_info {
 		fi
 		if [[ ( $net_line != " "* ) && ( $net_line != "Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles"* ) && ( $net_line != "Launching networklist"* ) && ( $net_line != "(Software)"* ) ]]; then
 			if [[ $net_count -gt 0 ]]; then
-				#write line out to file
-				local out_str=$net_name"|"$net_type"|"$net_first_connect"|"$net_last_connect"|"$net_mac
-				write_out $out_str $out_file_networks $out_file_networks_header
+				#add to array
+				local net_list[$net_count]=$net_name"|"$net_type"|"$net_first_connect"|"$net_last_connect"|"$net_timezone"|"$net_mac
 				
 				#resetting variables to prevent crossover
 				local net_name=""
 				local net_last_connect=""
 				local net_first_connect=""
+				local net_timezone=""
 				local net_mac=""
 				local net_type=""
 			fi
+			(( net_count++ ))
 			
 			local net_name=$(echo $net_line | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-			(( net_count++ ))
+		fi
+		if [[ $net_line == *"Key LastWrite"* ]]; then
+			local net_reg_last_write=$(echo $net_line | sed 's/Key LastWrite    ://' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+			local net_reg_last_write=$(date -d $net_reg_last_write -Iseconds -u)
+			local last_write_hrs=$(echo $net_reg_last_write | cut -d 'T' -f2 | cut -d ':' -f1 | sed -e 's/^0*//')
 		fi
 		if [[ $net_line == *"DateLastConnected"* ]]; then
 			local net_last_connect=$(echo $net_line | sed 's/DateLastConnected://' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
-			local net_last_connect=$(date -d $net_last_connect -Iseconds -u)
+			local net_last_connect_local=$(date -d $net_last_connect -Iseconds -u)
+			local last_connect_hrs=$(echo $net_last_connect_local | cut -d 'T' -f2 | cut -d ':' -f1 | sed -e 's/^0*//')
+			local time_diff_hrs=$(( last_connect_hrs - last_write_hrs ))
+			if [[ $time_diff_hrs -lt 0 ]]; then
+				local net_timezone="UTC$time_diff_hrs"
+			else
+				local net_timezone="UTC+$time_diff_hrs"
+			fi
+			local net_last_connect=$(date -d "$net_last_connect $net_timezone" -Iseconds -u)
 		fi
 		if [[ $net_line == *"DateCreated"* ]]; then
 			local net_first_connect=$(echo $net_line | sed 's/DateCreated      ://' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
@@ -820,10 +959,51 @@ function get_network_info {
 			local net_type=$(echo $net_line | sed 's/Type             ://' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
 		fi
 	done
+
+	local extra_lines=false
+	for net_line in $network_info; do
+		#collecting extra timestamps noted by RegRipper
+		if [[ ( "$extra_lines" == true ) ]]; then
+			local net_name=$(echo $net_line | cut -d 'Z' -f2 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//') 
+			local connect_time=$(echo $net_line | cut -d 'Z' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+			local connect_time=$(date -d $connect_time -Iseconds -u)
+			
+			#checking if network name is already in array & adding extra timestamp if it is
+			local found=$(array_contains $net_name "${net_list[@]}")
+			if [[ "$found" == false ]]; then			
+				#add to array
+				local net_list[$net_count]=$net_name"||"$connect_time"||||"
+				(( net_count++ ))
+			else
+				#update array entry
+				local pos=$(elem_loc_in_array $net_name "${net_list[@]}")
+				if [[ ( $pos -ge 0 ) && ( $pos -lt ${#net_list[@]} ) ]]; then
+					local temp=${net_list[$pos]}
+					local net_list[$pos]=$temp"|"$connect_time
+				fi
+			fi
+		fi
+		if [[ $net_line == "Date"* ]]; then
+			#adding last entry to array
+			local net_list[$net_count]=$net_name"|"$net_type"|"$net_first_connect"|"$net_last_connect"|"$net_timezone"|"$net_mac
+			(( net_count++ ))
+			
+			#resetting variables to prevent crossover
+			local net_name=""
+			local net_last_connect=""
+			local net_first_connect=""
+			local net_timezone=""
+			local net_mac=""
+			local net_type=""
 	
-	#write last line out to file
-	local out_str=$net_name"|"$net_type"|"$net_first_connect"|"$net_last_connect"|"$net_mac
-	write_out $out_str $out_file_networks $out_file_networks_header
+			local extra_lines=true
+		fi
+	done
+	
+	#writing network info out
+	for net_info in "${net_list[@]}"; do
+		write_out $net_info $out_file_networks $out_file_networks_header
+	done
 }
 
 #extracting registry value for key
@@ -998,16 +1178,18 @@ out_file_os_header="Volume Name|Volume Serial Number|Filesystem|Size(bytes)|Wind
 out_file_filelist_header="Volume Serial Number|File inode number|Type (dir/file)|Full Path"
 out_file_apps_header="Registry Key|User SID|Application|Version|Company|Install Date"
 out_file_users_header="Username|SID|Full Name|Comment|Account Created|Last Login|Login Count|Password Set|Password Last Reset|Last Incorrect Password Entry|Password Hint|Flags|Groups"
-out_file_usbs_header="USB ID|Name|Serial Number|Parent ID Prefix|Last Mounted As|First Connected|Last Connected|Last Removed|Other Connection Timestamps"
-out_file_networks_header="Network Name|Type|First Connected|Last Connected|Default Gateway MAC Address"
+out_file_usbs_header="USB ID|Name|Serial Number|Parent ID Prefix|Last Mounted As|First Connected|Last Connected|Last Removed|Setupapi Connection Timestamps"
+out_file_networks_header="Network Name|Type|First Connected|Last Connected|Timezone|Default Gateway MAC Address|Other Connections"
 
 #adding extra fields to header if hash (and nist) options selected
 if [[ ( "$hash" == true ) ]]; then
 	out_file_os_header=$out_file_os_header"|MD5|SHA1"
 	out_file_filelist_header=$out_file_filelist_header"|MD5|SHA1"
+	#out_file_apps_header=$out_file_apps_header"|MD5|SHA1"
 	
 	if [[ ( "$nist" == true ) ]]; then
 		out_file_filelist_header=$out_file_filelist_header"|In NIST NSRL?|NIST Category"
+		#out_file_apps_header=$out_file_apps_header"|In NIST NSRL?|NIST Category"
 	fi
 fi
 
@@ -1176,6 +1358,7 @@ else
 	#Physical image
 	echo "Processing physical image file:" $image_file
 	img_method="physical"
+	#vol_count=0
 	
 	#writing out header information for output files depending on selected format
 	if [[ $modules == *"osinfo"* ]]; then
@@ -1191,6 +1374,7 @@ else
 	for mm_line in $mmls_out; do
 		if [[ $mm_line =~ ^[[:digit:]][[:digit:]][[:digit:]]:* ]]; then
 			start_sec=$(echo $mm_line | sed 's/ \+/ /g' | cut -d' ' -f3)
+			#(( vol_count++ ))
 			
 			#Getting filesystem type (in lowercase)
 			fs_type=$(get_fs_type)
