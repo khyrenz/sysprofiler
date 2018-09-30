@@ -576,7 +576,7 @@ function get_usb_info {
 						local setupapi_times=$(get_setupapi_usb_times $usb_sn)
 						
 						#write out existing info before moving onto next section
-						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$last_written"|"$setupapi_times
 						write_out $out_str $out_file_usbs $out_file_usbs_header
 						
 						#resetting variables to prevent crossover
@@ -587,6 +587,7 @@ function get_usb_info {
 						local mountdrive=""
 						local extra_times=""
 						local setupapi_times=""
+						local last_written=""
 					fi
 					
 					local usb_id_str=$(echo $usb_line | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
@@ -601,7 +602,7 @@ function get_usb_info {
 						local setupapi_times=$(get_setupapi_usb_times $usb_sn)
 						
 						#write out existing info before moving onto next section
-						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+						local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$last_written"|"$setupapi_times
 						write_out $out_str $out_file_usbs $out_file_usbs_header
 						
 						#resetting variables to prevent crossover
@@ -611,8 +612,11 @@ function get_usb_info {
 						local mountdrive=""
 						local extra_times=""
 						local setupapi_times=""
+						local last_written=""
 					fi
 					local usb_sn=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/S\/N://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+					local last_written=$(echo $usb_line | cut -d '[' -f2 | sed 's/]//g' | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
+					local last_written=$(date -d $last_written -Iseconds -u)
 				fi
 				if [[ $usb_line == *"FriendlyName"* ]]; then
 					local usb_name=$(echo $usb_line | sed -e 's/^[[:space:]]*//' | sed 's/FriendlyName    ://' | cut -d '[' -f1 | sed -e 's/^[[:space:]]*//' | sed -e 's/[[:space:]]*$//')
@@ -647,7 +651,7 @@ function get_usb_info {
 			local setupapi_times=$(get_setupapi_usb_times $usb_sn)
 						
 			#write out info for last USB listed
-			local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$setupapi_times
+			local out_str=$usb_id_str"|"$usb_name"|"$usb_sn"|"$usb_parent_id_prefix"|"$mountdrive"|"$extra_times"|"$last_written"|"$setupapi_times
 			write_out $out_str $out_file_usbs $out_file_usbs_header
 		fi
 		
@@ -662,7 +666,7 @@ function get_usb_info {
 			if [[ $cd_line == "Device: "* ]]; then
 				if [[ ! -z $cd_id_str ]]; then					
 					#write out existing info before moving onto next section
-					local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"||"
+					local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"|||"
 					write_out $out_str $out_file_usbs $out_file_usbs_header
 					
 					#resetting variables to prevent crossover
@@ -680,7 +684,7 @@ function get_usb_info {
 		done
 			
 			#write out info for last USB listed
-			local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"||"
+			local out_str=$cd_id_str"||"$cd_sn"||"$mountdrive"|||"
 			write_out $out_str $out_file_usbs $out_file_usbs_header
 						
 		#deleting mountdev temp file
@@ -865,7 +869,8 @@ function get_apps {
 			local reg_key=$uninst_line
 		fi
 	done
-
+	
+	#writing app info out
 	for (( i=0; i<${#apps[@]}; i++ )); do
 		write_out ${apps[$i]} $out_file_apps_all $out_file_apps_header
 	done
@@ -1178,7 +1183,7 @@ out_file_os_header="Volume Name|Volume Serial Number|Filesystem|Size(bytes)|Wind
 out_file_filelist_header="Volume Serial Number|File inode number|Type (dir/file)|Full Path"
 out_file_apps_header="Registry Key|User SID|Application|Version|Company|Install Date"
 out_file_users_header="Username|SID|Full Name|Comment|Account Created|Last Login|Login Count|Password Set|Password Last Reset|Last Incorrect Password Entry|Password Hint|Flags|Groups"
-out_file_usbs_header="USB ID|Name|Serial Number|Parent ID Prefix|Last Mounted As|First Connected|Last Connected|Last Removed|Setupapi Connection Timestamps"
+out_file_usbs_header="USB ID|Name|Serial Number|Parent ID Prefix|Last Mounted As|First Connected|Last Connected|Last Removed|Reg Key Last Written|Setupapi Connection Timestamps"
 out_file_networks_header="Network Name|Type|First Connected|Last Connected|Timezone|Default Gateway MAC Address|Other Connections"
 
 #adding extra fields to header if hash (and nist) options selected

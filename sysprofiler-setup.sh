@@ -1,5 +1,7 @@
 #!/bin/bash
 
+sudo apt update
+
 #installing packages required
 sudo apt-get -y install cpanminus make unzip wget sleuthkit libwin-hivex-perl bc python python-crypto john
 
