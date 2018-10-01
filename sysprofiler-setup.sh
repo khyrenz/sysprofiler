@@ -41,7 +41,7 @@ chmod +x /usr/local/bin/pwdump
 cp -r creddump7-master/framework /usr/local/bin/framework
 
 #cleaning up
-rm -r creddump-master
+rm -r creddump7-master
 rm master.zip
 
 #downloading and installing pylnker
