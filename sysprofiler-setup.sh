@@ -32,16 +32,16 @@ rm -r RegRipper2.8-master
 rm master.zip
 
 #downloading and installing pwdump
-wget -q https://github.com/moyix/creddump/archive/master.zip
+wget -q https://github.com/Neohapsis/creddump7/archive/master.zip
 unzip -q master.zip
-cp creddump-master/pwdump.py pwdump
+cp creddump7-master/pwdump.py pwdump
 sed -i "1i #!`which python`" pwdump
 cp pwdump /usr/local/bin
 chmod +x /usr/local/bin/pwdump
-cp -r creddump-master/framework /usr/local/bin/framework
+cp -r creddump7-master/framework /usr/local/bin/framework
 
 #cleaning up
-rm -r creddump-master
+rm -r creddump7-master
 rm master.zip
 
 #downloading and installing pylnker
